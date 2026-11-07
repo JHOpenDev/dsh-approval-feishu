@@ -1,7 +1,7 @@
 /** Plugin entry: forwards DSH approval requests to Feishu cards and answers them from card button clicks. */
 import type { Context } from '@deepseek-ai/cordis'
 import { FeishuApprovalBridge, type BridgeLogger } from './answerer.ts'
-import { parseConfig } from './config.ts'
+import { resolveConfig, stateFilePath } from './config.ts'
 import { LarkCli, runCardActionConsumer } from './lark.ts'
 
 export const name = 'dsh-approval-feishu'
@@ -9,16 +9,17 @@ export { Config } from './config.ts'
 
 /** Mounts the bridge when a receiver is configured; otherwise the plugin stays a logged no-op. */
 export function apply(ctx: Context, config: unknown): void {
-  const settings = parseConfig(config)
+  const { config: settings, fromPatch, fromState } = resolveConfig(config)
   const log: BridgeLogger = {
     info: message => ctx.logger.info(`dsh-approval-feishu: ${message}`),
     warn: message => ctx.logger.warn(`dsh-approval-feishu: ${message}`),
     error: message => ctx.logger.error(`dsh-approval-feishu: ${message}`),
   }
   if (!settings.receiveId.trim()) {
-    log.info('waiting for configuration: set receiveId (open_id or chat_id) in the profile patch to take over approvals')
+    log.info(`waiting for setup: run \`node <package>/bin/setup.mjs\` once to connect Feishu, or set receiveId in the profile patch / ${stateFilePath()}`)
     return
   }
+  if (fromState && !fromPatch) log.info(`configured from ${stateFilePath()}`)
   const lark = new LarkCli(settings.cli)
   const bridge = new FeishuApprovalBridge({
     receiveIdType: settings.receiveIdType,

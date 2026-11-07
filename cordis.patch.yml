@@ -1,15 +1,8 @@
-# dsh-approval-feishu bundle layer: 插入审批转发插件。默认关闭，避免在未配置接收者时
-# 装进任何 profile 都悄悄接管审批。在 profile 层（cordis.patch.yml）启用并配置 receiveId：
-#
-# - id: dsh-approval-feishu
-#   disabled: false
-#   config:
-#     receiveId: ou_xxxx        # 你的 open_id（私聊审批）或群 chat_id（oc_，群内审批）
-#     # cli: /Users/you/.local/bin/lark-bot   # 机器人身份的 lark-cli 包装脚本
-#     # allowedOpenIds: [ou_xxxx]             # 只允许这些人点按钮；留空不限制
-#     # timeoutSeconds: 600                   # 等待审批的超时秒数
-#     # onTimeout: rejected                   # rejected=拒绝本次调用；unavailable=交还下游应答者
+# dsh-approval-feishu bundle layer: 插入审批转发插件，默认启用。
+# 未完成飞书接线前它是静默待命的（不接管任何审批、不发任何飞书请求）。
+# 接线只需运行一次引导脚本（会写入 ~/.dsh/dsh-approval-feishu.json）：
+#   node <本包目录>/bin/setup.mjs
+# 也可以改为在 profile 层（cordis.patch.yml）用 config: { receiveId: ... } 显式配置，优先级更高。
 - insert:
     - id: dsh-approval-feishu
       name: dsh-approval-feishu
-      disabled: true

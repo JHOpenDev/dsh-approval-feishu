@@ -80,7 +80,21 @@ node bin/find-open-id.mjs --cli ~/.local/bin/lark-bot
 
 ## 从零开始：让审批卡片出现在你的飞书
 
-插件本身只负责「转发审批」和「接收按钮点击」；飞书那一侧要**先有一个能收发消息的机器人**。如果你还没有，按下面四步走一次（约 10 分钟，只需要做一次）。
+插件本身只负责「转发审批」和「接收按钮点击」；飞书那一侧要**先有一个能收发消息的机器人**。
+
+### 一条命令接线（推荐）
+
+装好插件后（市场安装或本地安装均可），在终端运行一次：
+
+```bash
+node ~/.dsh/profiles/<你的profile>/node_modules/dsh-approval-feishu/bin/setup.mjs
+```
+
+脚本会依次完成：检测/创建机器人凭据（没有则弹出浏览器引导创建飞书应用）→ 等你给机器人发一条私聊消息以确认你的 open_id → 把配置写入 `~/.dsh/dsh-approval-feishu.json`（插件启动时自动读取，无需改任何 YAML）→ 发一张测试卡片并监听按钮点击，验证全链路。完成后重启 DSH 即可。
+
+下面是脚本每一步背后的手动流程，适合想理解原理或脚本失败时手动排查的人。
+
+### 手动流程
 
 ### ① 创建飞书应用（企业自建应用）
 
@@ -118,9 +132,15 @@ chmod +x ~/.local/bin/lark-bot
 # 首次使用前：LARKSUITE_CLI_CONFIG_DIR=~/.lark-cli-dsh-approval lark-cli config init ...
 ```
 
-### ③ 安装插件并配置接收者
+### ③ 安装插件并配置接收者（或直接用上面的 setup.mjs）
 
-按上文「方式一」从市场安装（或本地安装）后，在 profile 的 `cordis.patch.yml` 里配置。审批卡片发给谁，由 `receiveId` 决定：
+插件默认启用：装好后即处于「静默待命」，配置有三种来源，**优先级从高到低**：
+
+1. profile 的 `cordis.patch.yml` 里该插件的 `config`（显式配置，适合固定部署）
+2. `~/.dsh/dsh-approval-feishu.json`（`bin/setup.mjs` 写入的状态文件）
+3. schema 默认值（`receiveId` 为空 = 不接管任何审批）
+
+手动配置时在 profile 的 `cordis.patch.yml` 里写。审批卡片发给谁，由 `receiveId` 决定：
 
 - **发给你个人**（推荐）：`receiveIdType: open_id` + 你的 open_id。拿 open_id：
 

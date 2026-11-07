@@ -1,4 +1,7 @@
 /** Plugin configuration schema and the resolved runtime view of it. */
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import s from '@deepseek-ai/schemastery'
 
 export interface ApprovalFeishuConfig {
@@ -33,3 +36,41 @@ export const Config = s.object({
 
 /** Validate one configuration object against the schema, returning the typed view. */
 export const parseConfig = (config: unknown): ApprovalFeishuConfig => Config(config as never) as ApprovalFeishuConfig
+
+/** Every configuration key the schema accepts, for merging and unknown-key stripping. */
+const KNOWN_KEYS = ['cli', 'receiveIdType', 'receiveId', 'allowedOpenIds', 'timeoutSeconds', 'onTimeout', 'reasonMaxChars', 'commandMaxChars', 'lang']
+
+/** Absolute path of the shared setup state file the `bin/setup.mjs` guide writes. */
+export const stateFilePath = (): string => join(homedir(), '.dsh', 'dsh-approval-feishu.json')
+
+/** Reads the setup state file, returning `{}` when absent or unparsable. */
+export const readStateFile = (path = stateFilePath()): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Effective configuration: the profile patch entry wins per key, the setup state file fills the
+ * rest, and schema defaults apply last. A fresh install with neither source configured resolves to
+ * the empty `receiveId` passive mode.
+ */
+export function resolveConfig(patchConfig: unknown, statePath = stateFilePath()): { config: ApprovalFeishuConfig, fromPatch: boolean, fromState: boolean } {
+  const patch = typeof patchConfig === 'object' && patchConfig !== null && !Array.isArray(patchConfig)
+    ? { ...patchConfig as Record<string, unknown> } : {}
+  const state = readStateFile(statePath)
+  const merged: Record<string, unknown> = {}
+  for (const key of KNOWN_KEYS) {
+    if (key in patch) merged[key] = patch[key]
+    else if (key in state) merged[key] = state[key]
+  }
+  return {
+    config: parseConfig(merged),
+    fromPatch: KNOWN_KEYS.some(key => key in patch),
+    fromState: KNOWN_KEYS.some(key => key in state),
+  }
+}
