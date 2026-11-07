@@ -78,6 +78,83 @@ node bin/find-open-id.mjs --cli ~/.local/bin/lark-bot
 
 脚本会打印你的 `ou_…` 和可直接粘贴的配置片段。
 
+## 从零开始：让审批卡片出现在你的飞书
+
+插件本身只负责「转发审批」和「接收按钮点击」；飞书那一侧要**先有一个能收发消息的机器人**。如果你还没有，按下面四步走一次（约 10 分钟，只需要做一次）。
+
+### ① 创建飞书应用（企业自建应用）
+
+1. 打开 [飞书开放平台](https://open.feishu.cn/) → **开发者后台** → 创建**企业自建应用**，记下 `App ID`（`cli_` 开头）和 `App Secret`。
+2. 在应用的 **添加应用能力** 里开启**机器人**。
+3. 在 **权限管理** 里开通：
+   - `im:message`（收发消息；发卡片、改写卡片用）
+   - `im:message:readonly`（接收 `card.action.trigger` 按钮回调要求此权限）
+4. 在 **事件与回调** 里：
+   - 订阅方式选择**使用长连接接收事件**（无需公网回调地址）
+   - 添加事件 **`card.action.trigger`（卡片回调）**——不加这个，点了按钮插件收不到
+5. 在 **应用发布 → 版本管理与发布** 创建版本并发布；**可用范围**里要包含你自己（否则你搜不到这个机器人）。
+
+### ② 安装并登录 lark-cli
+
+[lark-cli](https://github.com/larksuite/lark-cli) 是 Lark 官方 CLI，插件通过它收发飞书消息。安装后用上一步的凭据初始化（Secret 从 stdin 喂，避免出现在进程列表里）：
+
+```bash
+lark-cli config init --app-id cli_xxxxxxxx --app-secret-stdin --brand feishu
+# 粘贴 App Secret 后回车
+
+lark-cli auth status        # identities.bot 应为 ready
+lark-cli doctor             # 整体健康检查
+```
+
+如果这台机器上 lark-cli 还要供**你自己**（用户身份）使用，建议给机器人单独一个配置目录，写一个两行的包装脚本（插件的 `cli` 配置指向它）：
+
+```bash
+cat > ~/.local/bin/lark-bot <<'EOF'
+#!/bin/sh
+export LARKSUITE_CLI_CONFIG_DIR="$HOME/.lark-cli-dsh-approval"
+exec "$HOME/.local/bin/lark-cli" "$@"
+EOF
+chmod +x ~/.local/bin/lark-bot
+# 首次使用前：LARKSUITE_CLI_CONFIG_DIR=~/.lark-cli-dsh-approval lark-cli config init ...
+```
+
+### ③ 安装插件并配置接收者
+
+按上文「方式一」从市场安装（或本地安装）后，在 profile 的 `cordis.patch.yml` 里配置。审批卡片发给谁，由 `receiveId` 决定：
+
+- **发给你个人**（推荐）：`receiveIdType: open_id` + 你的 open_id。拿 open_id：
+
+  ```bash
+  node <插件目录>/bin/find-open-id.mjs --cli ~/.local/bin/lark-bot
+  # 在飞书里给机器人发一条私聊消息，脚本会打印 ou_… 和配置片段
+  ```
+
+- **发到群里**：把机器人拉进群，`receiveIdType: chat_id` + 群的 chat_id（`lark-cli im +chat-list --as bot` 可查）。
+
+```yaml
+- id: dsh-approval-feishu
+  disabled: false
+  config:
+    receiveId: ou_xxxx            # 上面拿到的 open_id 或 oc_ 群 id
+    cli: /Users/you/.local/bin/lark-bot   # 机器人身份的 lark-cli；默认 PATH 上的 lark-cli
+    allowedOpenIds: [ou_xxxx]     # 建议只允许自己点按钮
+```
+
+### ④ 重启 DSH 并验证
+
+重启后看 DSH 日志：出现 `dsh-approval-feishu: active: approvals go to open_id ou_…` 即接入成功。然后在任意会话里让 DeepSeek 做一件需要审批的事（例如写工作区之外的文件），几秒内飞书应收到橙色审批卡片；点「✅ 允许一次」命令继续、卡片变绿，点「❌ 拒绝」操作被拒、卡片变红。
+
+### 常见问题
+
+| 现象 | 原因与处理 |
+|---|---|
+| 日志停在 `waiting for configuration` | `receiveId` 没配或为空；按 ③ 配置 |
+| 卡片发不出来，日志有 `lark-cli failed (99991672…)` 或 `missing_scopes` | 应用权限没开全；按报错里的 `missing_scopes` 列表在开发者后台补权限 |
+| 卡片能收到，点按钮没反应 | 控制台没有订阅 `card.action.trigger` 事件，或没选「长连接」接收方式；补订阅后无需重启插件，消费进程会自动重连 |
+| 点按钮的人不是你自己却生效了 | 未配置 `allowedOpenIds`；强烈建议配置 |
+| 找不到机器人 | 应用未发布版本，或你不在可用范围里 |
+| 审批迟迟不点，会话卡住 | 默认 10 分钟超时后自动拒绝（fail closed）；可在 `timeoutSeconds` 调整 |
+
 ## 行为细节
 
 | 场景 | 行为 |
