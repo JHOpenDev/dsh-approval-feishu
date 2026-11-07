@@ -1,54 +1,34 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { Config, resolveConfig, stateFilePath } from '../src/config.ts'
+import { Config, parseConfig } from '../src/config.ts'
+import { maskId, statusFilePath } from '../src/status.ts'
 
-const tempState = (state: unknown): string => {
-  const path = join(mkdtempSync(join(tmpdir(), 'approval-feishu-')), 'state.json')
-  writeFileSync(path, JSON.stringify(state))
-  return path
-}
-
-describe('resolveConfig', () => {
-  it('resolves schema defaults when neither patch nor state file is present', () => {
-    const { config, fromPatch, fromState } = resolveConfig(undefined, join(tmpdir(), 'approval-feishu-missing.json'))
-    expect(config.receiveId).toBe('')
-    expect(config.cli).toBe('lark-cli')
-    expect(fromPatch).toBe(false)
-    expect(fromState).toBe(false)
-  })
-
-  it('fills unset keys from the state file written by the setup guide', () => {
-    const state = tempState({
-      cli: '/opt/lark-bot', receiveId: 'ou_state', allowedOpenIds: ['ou_state'], lang: 'en', note: 'ignored',
+describe('Config', () => {
+  it('applies defaults and types the receiveId switch', () => {
+    const parsed = Config({} as never) as Record<string, unknown>
+    expect(parsed).toMatchObject({
+      cli: 'lark-cli', receiveIdType: 'open_id', receiveId: '', allowedOpenIds: [],
+      timeoutSeconds: 600, onTimeout: 'rejected', reasonMaxChars: 1200, commandMaxChars: 800, lang: 'zh',
     })
-    const { config, fromState } = resolveConfig(undefined, state)
-    expect(config).toMatchObject({ cli: '/opt/lark-bot', receiveId: 'ou_state', allowedOpenIds: ['ou_state'], lang: 'en', timeoutSeconds: 600 })
-    expect(fromState).toBe(true)
+    expect(() => Config({ timeoutSeconds: 5 })).toThrow()
+    expect(() => Config({ receiveIdType: 'email' } as never)).toThrow()
   })
 
-  it('lets the profile patch entry win per key over the state file', () => {
-    const state = tempState({ receiveId: 'ou_state', cli: '/opt/state-cli', timeoutSeconds: 60 })
-    const { config, fromPatch } = resolveConfig({ receiveId: 'oc_patch' }, state)
-    expect(config.receiveId).toBe('oc_patch')
-    expect(config.cli).toBe('/opt/state-cli')
-    expect(config.timeoutSeconds).toBe(60)
-    expect(fromPatch).toBe(true)
-  })
-
-  it('survives a corrupt or non-object state file', () => {
-    const broken = join(mkdtempSync(join(tmpdir(), 'approval-feishu-')), 'broken.json')
-    writeFileSync(broken, '{not json')
-    expect(resolveConfig(undefined, broken).config.receiveId).toBe('')
-    expect(resolveConfig(undefined, tempState([1, 2])).config.receiveId).toBe('')
+  it('parseConfig surfaces the empty receiveId that marks the passive state', () => {
+    // The host passes schema-filled defaults when the profile entry has no config; the empty
+    // receiveId is the passive marker either way.
+    expect(parseConfig(undefined).receiveId).toBe('')
+    expect(parseConfig({}).receiveId).toBe('')
+    expect(parseConfig({ receiveId: 'ou_x' }).receiveId).toBe('ou_x')
   })
 })
 
-describe('Config / stateFilePath', () => {
-  it('keeps the schema defaults for a bare object', () => {
-    expect(Config({} as never)).toMatchObject({ receiveIdType: 'open_id', onTimeout: 'rejected', lang: 'zh' })
-    expect(stateFilePath()).toContain('.dsh')
-    expect(stateFilePath()).toMatch(/dsh-approval-feishu\.json$/)
+describe('status helpers', () => {
+  it('masks long identifiers and keeps short ones', () => {
+    expect(maskId('ou_fbb4ecde883b9ad18f4c41c2eabc0931')).toBe('ou_fbb…0931')
+    expect(maskId('oc_short')).toBe('oc_short')
+  })
+
+  it('names the status file under ~/.dsh', () => {
+    expect(statusFilePath()).toMatch(/[/\\]\.dsh[/\\]dsh-approval-feishu\.status\.json$/)
   })
 })

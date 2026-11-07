@@ -96,7 +96,9 @@ node ~/.dsh/profiles/<你的profile>/node_modules/dsh-approval-feishu/bin/setup.
 2. **扫第二下** —— 用你自己的飞书身份授权；授权后脚本直接取到你的 open_id，并列出你的群
 3. **选一下** —— 审批卡片发到哪里：私聊给你（默认）或选一个群；再确认是否只允许你自己点按钮
 
-然后脚本自动写入 `~/.dsh/dsh-approval-feishu.json`（插件启动时读取，无需改任何 YAML），发一张测试卡片并监听你的按钮点击，验证全链路。重启 DSH 即生效。
+然后脚本把配置**直接写进所选 profile 的 `cordis.patch.yml`**（自动备份原文件为 `cordis.patch.yml.bak-setup`，可重复运行），并发一张测试卡片监听你的按钮点击，验证全链路。重启 DSH 即生效。
+
+随时用 `node bin/setup.mjs --status` 查看插件的运行状态（active/passive、消费进程健康度、最后错误）——不需要去翻宿主日志。
 
 不想扫码或企业策略不允许用户授权？跳过第二步，给机器人发一条私聊消息同样能拿到 open_id；手动流程见下文。
 
@@ -118,7 +120,13 @@ node ~/.dsh/profiles/<你的profile>/node_modules/dsh-approval-feishu/bin/setup.
 
 ### ② 安装并登录 lark-cli
 
-[lark-cli](https://github.com/larksuite/lark-cli) 是 Lark 官方 CLI，插件通过它收发飞书消息。安装后用上一步的凭据初始化（Secret 从 stdin 喂，避免出现在进程列表里）：
+lark-cli 是 Lark 官方 CLI（npm 包名 [`@larksuite/cli`](https://www.npmjs.com/package/@larksuite/cli)），插件通过它收发飞书消息：
+
+```bash
+npm install -g @larksuite/cli    # 需要 Node ≥ 22 在 PATH 上
+```
+
+注意：lark-cli 的启动 shim 依赖 `node` 在系统 PATH 上。如果 DSH 宿主的 PATH 里没有 Node（DSH 内置运行时不在系统 PATH），包装脚本里要显式注入（见下）。安装后用上一步的凭据初始化（Secret 从 stdin 喂，避免出现在进程列表里）：
 
 ```bash
 lark-cli config init --app-id cli_xxxxxxxx --app-secret-stdin --brand feishu
@@ -134,6 +142,8 @@ lark-cli doctor             # 整体健康检查
 cat > ~/.local/bin/lark-bot <<'EOF'
 #!/bin/sh
 export LARKSUITE_CLI_CONFIG_DIR="$HOME/.lark-cli-dsh-approval"
+# 若系统 PATH 没有 node（DSH 内置运行时场景），取消下一行注释并改成你的 node 路径：
+# export PATH="/opt/homebrew/bin:$PATH"
 exec "$HOME/.local/bin/lark-cli" "$@"
 EOF
 chmod +x ~/.local/bin/lark-bot
@@ -142,13 +152,11 @@ chmod +x ~/.local/bin/lark-bot
 
 ### ③ 安装插件并配置接收者（或直接用上面的 setup.mjs）
 
-插件默认启用：装好后即处于「静默待命」，配置有三种来源，**优先级从高到低**：
+插件默认启用：装好后即处于「静默待命」。**唯一的配置来源是 profile 的 `cordis.patch.yml` 里该插件的 `config`**（`receiveId` 为空 = 不接管任何审批）。
 
-1. profile 的 `cordis.patch.yml` 里该插件的 `config`（显式配置，适合固定部署）
-2. `~/.dsh/dsh-approval-feishu.json`（`bin/setup.mjs` 写入的状态文件）
-3. schema 默认值（`receiveId` 为空 = 不接管任何审批）
+> 为什么没有配置文件可放？DSH 在把配置交给插件前会用插件导出的 schema 预填全部默认值，任何「外部状态文件兜底」的方案都会被默认值遮蔽（v0.2.x 的教训）。所以配置只走 profile patch 这一条被 DSH 官方支持、真机验证过的路径。
 
-手动配置时在 profile 的 `cordis.patch.yml` 里写。审批卡片发给谁，由 `receiveId` 决定：
+审批卡片发给谁，由 `receiveId` 决定：
 
 - **发给你个人**（推荐）：`receiveIdType: open_id` + 你的 open_id。拿 open_id：
 
@@ -176,6 +184,7 @@ chmod +x ~/.local/bin/lark-bot
 
 | 现象 | 原因与处理 |
 |---|---|
+| 分不清插件是没配置、被动还是消费进程在崩 | 跑 `node bin/setup.mjs --status`（或看 `~/.dsh/dsh-approval-feishu.status.json`）：`state` 是 passive/active，`consumer` 是 running/restarting，`lastConsumerError` 有崩溃原因 |
 | 日志停在 `waiting for configuration` | `receiveId` 没配或为空；按 ③ 配置 |
 | 卡片发不出来，日志有 `lark-cli failed (99991672…)` 或 `missing_scopes` | 应用权限没开全；按报错里的 `missing_scopes` 列表在开发者后台补权限 |
 | 卡片能收到，点按钮没反应 | 控制台没有订阅 `card.action.trigger` 事件，或没选「长连接」接收方式；补订阅后无需重启插件，消费进程会自动重连 |

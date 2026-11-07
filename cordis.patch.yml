@@ -1,8 +1,9 @@
 # dsh-approval-feishu bundle layer: 插入审批转发插件，默认启用。
 # 未完成飞书接线前它是静默待命的（不接管任何审批、不发任何飞书请求）。
-# 接线只需运行一次引导脚本（会写入 ~/.dsh/dsh-approval-feishu.json）：
+# 接线只需运行一次引导脚本（会自动把配置写进 profile 的 cordis.patch.yml）：
 #   node <本包目录>/bin/setup.mjs
-# 也可以改为在 profile 层（cordis.patch.yml）用 config: { receiveId: ... } 显式配置，优先级更高。
+# 查看插件运行状态：node <本包目录>/bin/setup.mjs --status
+# 也可以手动在 profile 层（cordis.patch.yml）给本插件写 config（receiveId …），这是唯一的配置来源。
 - insert:
     - id: dsh-approval-feishu
       name: dsh-approval-feishu
