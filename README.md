@@ -19,14 +19,29 @@ DSH 会话                       本插件                            飞书
 - 决定落定后，插件用 `im messages patch` 把原卡片改写为结果态（绿色「已允许」/红色「已拒绝」/灰色「超时/取消/失效」），并去掉按钮，防止误点。
 - 每次审批都会在会话日志里留下 `approval/asked` + `approval/decided` 审计对（由 DSH 本身保证），飞书卡片只是决定入口。
 
-## 安装（DSH 桌面端 / 任意 profile）
+## 安装
 
 前置：DSH `^0.2.1-rc.3`、Node `^22.19 || >=24`、pnpm，以及一个**机器人身份的 lark-cli 配置**（与 dsh-superagent 飞书 Source 共用同一个即可）。
+
+### 方式一：从插件市场安装（推荐）
+
+1. 打开 DSH 的 **设置 → 插件 → 发现**（Discover），添加索引 URL：
+
+   ```text
+   https://raw.githubusercontent.com/JHOpenDev/dsh-approval-feishu/master/index.json
+   ```
+
+2. 搜索「飞书审批」（或 `dsh-approval-feishu`）→ **安装**。安装走 npm（`dsh-approval-feishu@<version>`），由 DSH 的 plugin-manager 写入 profile。
+3. 在 profile 的 `cordis.patch.yml` 里启用并配置 `receiveId`（见下文），重启 DSH。
+
+### 方式二：本地源码安装
 
 ```bash
 cd dsh-approval-feishu
 pnpm install && pnpm check   # typecheck + 23 项测试 + 构建 lib/
 ```
+
+然后在 profile 的 `package.json` 里声明 bundle 与依赖：
 
 1. 在 profile 的 `package.json` 里声明 bundle 与依赖：
 
@@ -39,7 +54,7 @@ pnpm install && pnpm check   # typecheck + 23 项测试 + 构建 lib/
    }
    ```
 2. `pnpm install`。
-3. 在 profile 的 `cordis.patch.yml` 里启用并配置（bundle 层默认 `disabled: true`）：
+3. 在 profile 的 `cordis.patch.yml` 里启用并配置（bundle 层默认 `disabled: true`；从市场安装的包同样只需这一步）：
 
    ```yaml
    - id: dsh-approval-feishu

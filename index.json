@@ -1,0 +1,93 @@
+{
+  "format": 1,
+  "title": {
+    "zh": "JHOpenDev 的 DSH 插件",
+    "en": "JHOpenDev DSH plugins"
+  },
+  "description": {
+    "zh": "社区维护的 DeepSeek Harness 插件合集。",
+    "en": "Community-maintained plugins for the DeepSeek Harness."
+  },
+  "metadata": {
+    "categories": {
+      "automation": {
+        "title": {
+          "zh": "自动化",
+          "en": "Automation"
+        }
+      }
+    },
+    "labels": {
+      "feishu": {
+        "title": {
+          "zh": "飞书",
+          "en": "Feishu"
+        }
+      },
+      "approval": {
+        "title": {
+          "zh": "审批",
+          "en": "Approval"
+        }
+      }
+    },
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "dsh-approval-feishu",
+      "title": {
+        "zh": "飞书审批",
+        "en": "Feishu Approvals"
+      },
+      "description": {
+        "zh": "把 DeepSeek 的每次权限审批发成飞书交互卡片，在飞书里点「允许一次/拒绝」，无需守在电脑前。",
+        "en": "Send every DeepSeek approval request to a Feishu interactive card and decide it from your phone: allow once or reject with one click."
+      },
+      "author": "jianhaiyu-dot",
+      "homepage": "https://github.com/JHOpenDev/dsh-approval-feishu",
+      "repository": {
+        "url": "https://github.com/JHOpenDev/dsh-approval-feishu"
+      },
+      "metadata": {
+        "category": "automation",
+        "keywords": [
+          "dsh",
+          "feishu",
+          "lark",
+          "approval",
+          "审批",
+          "飞书",
+          "权限"
+        ],
+        "labels": [
+          "feishu",
+          "approval"
+        ],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794023910,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": "^0.2.1-rc.3"
+          }
+        },
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794023878,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": "^0.2.1-rc.3"
+          }
+        }
+      ]
+    }
+  ]
+}
