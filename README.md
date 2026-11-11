@@ -14,7 +14,7 @@ DSH 会话                       本插件                            飞书
 
 ## 工作原理
 
-- DSH 的审批接缝是 `@deepseek-ai/dsh-user-approval` 的 `approval/request` **waterfall 事件**（宿主会把同一事件转发给已连接的 Web 面板）。本插件把自己的 answerer **prepend 到监听链最前**：配置生效后，每次审批都先到飞书；卡片发送失败才回退给下游（面板仍可兜底）。
+- DSH 的审批接缝是 `@deepseek-ai/dsh-user-approval` 的 `approval/request` **waterfall 事件**（宿主会把同一事件转发给已连接的 Web 面板）。本插件把自己的 answerer **prepend 到监听链最前**，然后**双通道并行**：飞书卡片和自己调起的下游本地应答者（打开中的 DSH 面板）同时等待，**先批的生效**，另一方自动收起（本地面板靠取消信号关闭，飞书卡片改写成结果态）。卡片发送失败时直接委派给本地，请求不会丢。
 - 卡片按钮点击通过飞书开放平台的 **WebSocket 长连接**回来（`lark-cli event consume card.action.trigger`），不需要公网回调地址、不需要配置服务器。
 - 决定落定后，插件用 `im messages patch` 把原卡片改写为结果态（绿色「已允许」/红色「已拒绝」/灰色「超时/取消/失效」），并去掉按钮，防止误点。
 - 每次审批都会在会话日志里留下 `approval/asked` + `approval/decided` 审计对（由 DSH 本身保证），飞书卡片只是决定入口。
@@ -65,6 +65,7 @@ pnpm install && pnpm check   # typecheck + 23 项测试 + 构建 lib/
        # allowedOpenIds: [ou_xxxx]   # 只允许这些人点按钮；留空不限制
        # timeoutSeconds: 600         # 等待审批超时（默认 10 分钟）
        # onTimeout: rejected         # 超时=拒绝；改为 unavailable 则交还给下游（如打开中的面板）
+       # answerLocally: race         # race：本地面板与飞书并行、先批的生效；fallback：只在飞书失败/超时后交给本地
        # lang: zh                    # 卡片文案语言 zh/en
    ```
 4. 重启 DSH。日志出现 `dsh-approval-feishu: active: approvals go to open_id ou_…` 即生效；配置前是 `waiting for configuration`（不接管任何审批）。
@@ -202,6 +203,9 @@ chmod +x ~/.local/bin/lark-bot
 | 会话被取消/中断（信号 abort） | 结果 `cancelled`，卡片变灰 |
 | 插件重启时有未决审批 | 全部按 `cancelled` 结束，卡片变灰 |
 | 点击来自旧进程的卡片 | 卡片被标记为「已失效」，不影响当前状态 |
+| 本地面板先批（`answerLocally: race`，默认） | 立即按面板结果返回，飞书卡片改写成「已在 DSH 面板批准/拒绝」 |
+| 飞书先批（`answerLocally: race`，默认） | 立即返回，向本地面板发取消信号收起它的审批弹窗 |
+| 没有打开的面板 / 没有下游应答者 | 只等飞书，行为与单通道一致 |
 | 卡片发送失败（CLI 缺失、网络等） | 记日志并 `next()` 委派给下游 answerer，面板兜底 |
 | 同一会话并行多个审批 | 每个请求一张独立卡片，凭据（rid）互不相干 |
 | `allowedOpenIds` 不含点击者 | 忽略该点击，日志记录 |
@@ -212,7 +216,7 @@ chmod +x ~/.local/bin/lark-bot
 
 ```bash
 pnpm check        # tsc --noEmit + vitest + tsdown
-pnpm test         # 23 项单元测试（卡片构造、审批桥接全流程、会话信息提取、配置校验）
+pnpm test         # 32 项单元测试（卡片构造、审批桥接全流程、会话信息提取、配置校验）
 ```
 
 结构：`src/index.ts`（插件入口与接线）· `src/answerer.ts`（审批→卡片→按钮的桥）· `src/card.ts`（卡片 JSON）· `src/lark.ts`（lark-cli 封装与事件消费循环）· `src/session-info.ts`（从会话日志提取工具调用参数）· `src/config.ts`（配置 schema）。

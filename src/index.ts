@@ -28,6 +28,7 @@ export function apply(ctx: Context, config: unknown): void {
     allowedOpenIds: settings.allowedOpenIds,
     timeoutSeconds: settings.timeoutSeconds,
     onTimeout: settings.onTimeout,
+    answerLocally: settings.answerLocally,
     reasonMaxChars: settings.reasonMaxChars,
     commandMaxChars: settings.commandMaxChars,
     lang: settings.lang,

@@ -7,7 +7,8 @@ describe('Config', () => {
     const parsed = Config({} as never) as Record<string, unknown>
     expect(parsed).toMatchObject({
       cli: 'lark-cli', receiveIdType: 'open_id', receiveId: '', allowedOpenIds: [],
-      timeoutSeconds: 600, onTimeout: 'rejected', reasonMaxChars: 1200, commandMaxChars: 800, lang: 'zh',
+      timeoutSeconds: 600, onTimeout: 'rejected', answerLocally: 'race',
+      reasonMaxChars: 1200, commandMaxChars: 800, lang: 'zh',
     })
     expect(() => Config({ timeoutSeconds: 5 })).toThrow()
     expect(() => Config({ receiveIdType: 'email' } as never)).toThrow()

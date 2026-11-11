@@ -1,6 +1,6 @@
 /** The approval answerer: turns one `approval/request` into a Feishu card and a button click into the outcome. */
 import { randomUUID } from 'node:crypto'
-import { decidedCard, pendingCard, type PendingCard } from './card.ts'
+import { decidedCard, pendingCard, type DecidedCardInput, type PendingCard } from './card.ts'
 import type { CardActionEvent, LarkCli } from './lark.ts'
 import { describeToolCall, sessionOrigin } from './session-info.ts'
 import type { ApprovalOutcome, ApprovalRequestEvent } from './types.ts'
@@ -21,19 +21,37 @@ export interface BridgeOptions {
   reasonMaxChars: number
   commandMaxChars: number
   lang: 'zh' | 'en'
+  /**
+   * Whether the downstream (local) answerer runs in parallel with the Feishu card.
+   * `race`: both channels are live and the first decision wins.
+   * `fallback`: the card answers alone; the local answerer only sees the request when Feishu fails or times out.
+   */
+  answerLocally: 'race' | 'fallback'
 }
+
+/** The two decisions the card offers. */
+type CardDecision = 'allowed-once' | 'rejected'
 
 /** One answerer-side pending approval. */
 interface PendingEntry {
-  settle: (outcome: Exclude<ApprovalOutcome, 'unavailable'> | typeof TIMEOUT) => void
+  settle: (outcome: CardDecision) => void
+  cancel: () => void
   timer: NodeJS.Timeout
   messageId: string
   infoMarkdown: string
   rid: string
 }
 
-/** The promise marker separating "a decision arrived" from "the wait expired". */
-const TIMEOUT = 'approval-feishu/timeout' as const
+/** How the Feishu channel settled. */
+type CardSettlement =
+  | { kind: 'click', outcome: CardDecision }
+  | { kind: 'timeout' }
+  | { kind: 'aborted' }
+
+/** How the downstream (local) channel settled. */
+type LocalSettlement =
+  | { kind: 'local', outcome: ApprovalOutcome }
+  | { kind: 'unsettled' }
 
 const OUTCOME_BY_DECISION = { allow: 'allowed-once', reject: 'rejected' } as const
 
@@ -49,9 +67,12 @@ export class FeishuApprovalBridge {
   get pendingCount(): number { return this.pending.size }
 
   /**
-   * The waterfall answerer. Sends the card and waits for the click, the timeout, or the
-   * request's cancellation signal. A card send failure delegates to `next()` so the rest of
-   * the answerer chain (for example an open DSH panel) still sees the request.
+   * The waterfall answerer. It runs the Feishu card and the local answerer side by side and
+   * returns whichever decides first; the losing channel is cancelled so nobody is left
+   * looking at an approval that can no longer be settled.
+   *
+   * A card send failure delegates to `next()` (the local panel alone answers) so the request
+   * is never lost when Feishu is unreachable.
    */
   readonly answer = async (request: ApprovalRequestEvent, next: () => Promise<ApprovalOutcome>): Promise<ApprovalOutcome> => {
     const rid = randomUUID().slice(0, 8)
@@ -78,36 +99,104 @@ export class FeishuApprovalBridge {
       return next()
     }
     this.log.info(`approval for ${request.toolName} sent to Feishu as ${messageId} (rid ${rid})`)
-    const outcome = await new Promise<Exclude<ApprovalOutcome, 'unavailable'> | typeof TIMEOUT>(resolve => {
-      const settle = (value: Exclude<ApprovalOutcome, 'unavailable'> | typeof TIMEOUT): void => {
-        clearTimeout(entry.timer)
+
+    // The local answerer (an open DSH panel) must see the same request, but through a signal we
+    // own: the host's remote-event bridge watches this signal and, when it aborts, sends the
+    // panel a `cancel` frame that dismisses its dialog. That is how the losing side is closed.
+    const localCancel = new AbortController()
+    const upstream = request.signal
+    ;(request as { signal?: AbortSignal }).signal = upstream === undefined
+      ? localCancel.signal
+      : AbortSignal.any([upstream, localCancel.signal])
+
+    const local: Promise<LocalSettlement> = this.options.answerLocally === 'race'
+      ? Promise.resolve().then(() => next()).then(
+        outcome => ({ kind: 'local', outcome }) as LocalSettlement,
+        error => {
+          // A cancellation we caused (Feishu already decided) is expected, not a failure.
+          if (!localCancel.signal.aborted) {
+            this.log.warn(`the local answerer failed for ${request.toolName}: ${String(error)}`)
+          }
+          return { kind: 'unsettled' } as LocalSettlement
+        })
+      : Promise.resolve({ kind: 'unsettled' } as LocalSettlement)
+
+    const cardSettlement = new Promise<CardSettlement>(resolve => {
+      let done = false
+      const finish = (settlement: CardSettlement): void => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
         request.signal?.removeEventListener('abort', onAbort)
         this.pending.delete(rid)
-        resolve(value)
+        resolve(settlement)
       }
-      const onAbort = (): void => settle('cancelled')
-      const entry: PendingEntry = {
-        settle,
-        timer: setTimeout(() => settle(TIMEOUT), this.options.timeoutSeconds * 1000),
+      const onAbort = (): void => finish({ kind: 'aborted' })
+      const timer = setTimeout(() => finish({ kind: 'timeout' }), this.options.timeoutSeconds * 1000)
+      request.signal?.addEventListener('abort', onAbort, { once: true })
+      this.pending.set(rid, {
+        settle: outcome => finish({ kind: 'click', outcome }),
+        cancel: () => finish({ kind: 'aborted' }),
+        timer,
         messageId,
         infoMarkdown: card.infoMarkdown,
         rid,
-      }
-      request.signal?.addEventListener('abort', onAbort, { once: true })
-      this.pending.set(rid, entry)
+      })
     })
-    if (outcome === TIMEOUT) {
+
+    let settlement: CardSettlement | LocalSettlement = await Promise.race([cardSettlement, local])
+    // A downstream answerer that answered `unavailable` did not decide anything: keep waiting on Feishu.
+    if (settlement.kind === 'local' && settlement.outcome === 'unavailable') settlement = await cardSettlement
+    else if (settlement.kind === 'unsettled') settlement = await cardSettlement
+
+    /** Closes the local dialog when Feishu produced the decision. */
+    const silenceLocal = (): void => {
+      if (!localCancel.signal.aborted) localCancel.abort(new Error('approval was already decided in Feishu'))
+    }
+
+    if (settlement.kind === 'local') {
+      // Stop the card wait without touching the card: the patch below is the verdict.
+      this.pending.get(rid)?.cancel()
+      this.log.info(`approval ${rid} for ${request.toolName} decided in the local panel: ${settlement.outcome}`)
+      const outcome = settlement.outcome
+      const decision: DecidedCardInput['decision'] = outcome === 'cancelled'
+        ? 'cancelled'
+        : outcome === 'rejected' ? 'local-rejected' : 'local-allowed-once'
+      void this.markDecided(rid, messageId, card.infoMarkdown, decision).catch(error => {
+        this.log.warn(`updating the panel-decided card failed: ${String(error)}`)
+      })
+      return outcome
+    }
+
+    if (settlement.kind === 'aborted') {
+      silenceLocal()
+      this.log.info(`approval ${rid} for ${request.toolName} was cancelled by the requester`)
+      void this.markDecided(rid, messageId, card.infoMarkdown, 'cancelled').catch(error => {
+        this.log.warn(`updating the cancelled card failed: ${String(error)}`)
+      })
+      return 'cancelled'
+    }
+    if (settlement.kind === 'timeout') {
       this.log.warn(`approval ${rid} for ${request.toolName} timed out`)
       void this.markDecided(rid, messageId, card.infoMarkdown, 'timeout').catch(error => {
         this.log.warn(`updating the timed-out card failed: ${String(error)}`)
       })
-      return this.options.onTimeout === 'unavailable' ? next() : 'rejected'
+      if (this.options.onTimeout !== 'unavailable') {
+        silenceLocal()
+        return 'rejected'
+      }
+      // Fallback mode still owns the untouched local chain: hand the request over exactly once.
+      if (this.options.answerLocally === 'fallback') return next()
+      silenceLocal()
+      return 'unavailable'
     }
+    silenceLocal()
     // The agent resumes at once; the card catch-up happens in the background.
-    void this.markDecided(rid, messageId, card.infoMarkdown, outcome).catch(error => {
+    this.log.info(`approval ${rid} for ${request.toolName} decided in Feishu: ${settlement.outcome}`)
+    void this.markDecided(rid, messageId, card.infoMarkdown, settlement.outcome).catch(error => {
       this.log.warn(`updating the decided card failed: ${String(error)}`)
     })
-    return outcome
+    return settlement.outcome
   }
 
   /** Handles one parsed `card.action.trigger` event line from the consumer. */
@@ -150,11 +239,10 @@ export class FeishuApprovalBridge {
   dispose(): void {
     this.disposed = true
     for (const entry of [...this.pending.values()]) {
-      clearTimeout(entry.timer)
       void this.lark.patchCard(entry.messageId, decidedCard({
         infoMarkdown: entry.infoMarkdown, rid: entry.rid, decision: 'cancelled', lang: this.options.lang,
       })).catch(() => {})
-      entry.settle('cancelled')
+      entry.cancel()
     }
   }
 
@@ -166,7 +254,7 @@ export class FeishuApprovalBridge {
 
   /** Replaces the pending card with its decided state; failures are the caller's log concern. */
   private async markDecided(rid: string, messageId: string, infoMarkdown: string,
-    outcome: 'allowed-once' | 'rejected' | 'cancelled' | 'timeout'): Promise<void> {
-    await this.lark.patchCard(messageId, decidedCard({ infoMarkdown, rid, decision: outcome, lang: this.options.lang }))
+    decision: DecidedCardInput['decision']): Promise<void> {
+    await this.lark.patchCard(messageId, decidedCard({ infoMarkdown, rid, decision, lang: this.options.lang }))
   }
 }

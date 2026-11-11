@@ -37,7 +37,7 @@ export interface DecidedCardInput {
   /** The pending card's summary markdown. */
   infoMarkdown: string
   rid: string
-  decision: 'allowed-once' | 'rejected' | 'cancelled' | 'timeout' | 'stale'
+  decision: 'allowed-once' | 'rejected' | 'cancelled' | 'timeout' | 'stale' | 'local-allowed-once' | 'local-rejected'
   operator?: string
   lang: 'zh' | 'en'
 }
@@ -75,6 +75,8 @@ const copy = {
     cancelled: '🚫 已取消（请求方撤回）',
     timeout: '⌛ 已超时，未收到审批',
     stale: '🚫 已失效（审批已不在等待中）',
+    localAllowed: '✅ 已允许（允许一次 · 在 DSH 面板批准）',
+    localRejected: '⛔ 已拒绝（在 DSH 面板拒绝）',
     decidedBy: (operator: string) => `决定人 ${operator}`,
   },
   en: {
@@ -90,6 +92,8 @@ const copy = {
     cancelled: '🚫 Cancelled by requester',
     timeout: '⌛ Timed out without a decision',
     stale: '🚫 Stale (no longer awaiting approval)',
+    localAllowed: '✅ Allowed once (approved in the DSH panel)',
+    localRejected: '⛔ Rejected (in the DSH panel)',
     decidedBy: (operator: string) => `Decided by ${operator}`,
   },
 } as const
@@ -139,6 +143,8 @@ const DECIDED: Record<DecidedCardInput['decision'], { template: string, text: (t
   'cancelled': { template: 'grey', text: t => t.cancelled },
   'timeout': { template: 'grey', text: t => t.timeout },
   'stale': { template: 'grey', text: t => t.stale },
+  'local-allowed-once': { template: 'green', text: t => t.localAllowed },
+  'local-rejected': { template: 'red', text: t => t.localRejected },
 }
 
 /** Builds the card that replaces the pending one after a decision (or timeout): no buttons, one verdict. */

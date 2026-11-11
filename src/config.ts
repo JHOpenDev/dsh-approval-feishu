@@ -8,6 +8,7 @@ export interface ApprovalFeishuConfig {
   allowedOpenIds: string[]
   timeoutSeconds: number
   onTimeout: 'rejected' | 'unavailable'
+  answerLocally: 'race' | 'fallback'
   reasonMaxChars: number
   commandMaxChars: number
   lang: 'zh' | 'en'
@@ -24,6 +25,8 @@ export const Config = s.object({
     .description('等待审批的超时秒数；超时后按 onTimeout 处理，并把卡片标记为超时。'),
   onTimeout: s.union(['rejected', 'unavailable'] as const).default('rejected')
     .description('超时结果：rejected 直接拒绝本次调用；unavailable 交还给下游应答者（例如打开中的 DSH 面板），没有下游则失败关闭。'),
+  answerLocally: s.union(['race', 'fallback'] as const).default('race')
+    .description('本地应答者（DSH 面板）是否与飞书并行：race = 两边都推、先批的生效，另一方自动收起；fallback = 只在飞书发卡失败/超时时才交给本地。'),
   reasonMaxChars: s.number().min(50).max(4000).step(1).default(1200)
     .description('卡片上展示的审批原因最大字符数，超出截断。'),
   commandMaxChars: s.number().min(50).max(4000).step(1).default(800)
