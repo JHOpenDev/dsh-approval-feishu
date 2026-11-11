@@ -14,7 +14,7 @@
  *                          [--profile <名称>] [--profile-dir <绝对路径>] [--skip-test] [--skip-login]
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -55,7 +55,53 @@ if (hasFlag('--status')) {
 }
 
 // ── 定位 lark-cli ──────────────────────────────────────────────────
+const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+const profilesRoot = join(dshHome, 'profiles')
+
+/** Reads the plugin block of every profile patch, so setup reuses what the runtime already uses. */
+const readPluginEntries = () => {
+  const entries = []
+  try {
+    for (const name of readdirSync(profilesRoot)) {
+      const patch = join(profilesRoot, name, 'cordis.patch.yml')
+      if (!existsSync(patch)) continue
+      const lines = readFileSync(patch, 'utf8').split('\n')
+      const start = lines.findIndex(line => /^- id: dsh-approval-feishu\s*$/.test(line))
+      if (start < 0) continue
+      const config = {}
+      for (let index = start + 1; index < lines.length; index += 1) {
+        if (/^\S/.test(lines[index])) break
+        const match = /^\s+(cli|receiveIdType|receiveId|allowedOpenIds):\s*(.+?)\s*$/.exec(lines[index])
+        if (!match) continue
+        config[match[1]] = match[1] === 'allowedOpenIds'
+          ? match[2].replace(/^\[|\]$/g, '').split(',').map(value => value.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+          : match[2].replace(/^['"]|['"]$/g, '')
+      }
+      entries.push({ name, dir: join(profilesRoot, name), config })
+    }
+  } catch { /* profiles root missing: nothing to reuse */ }
+  return entries
+}
+const pluginEntries = readPluginEntries()
+const knownProfiles = existsSync(profilesRoot)
+  ? readdirSync(profilesRoot)
+    .map(name => ({ name, dir: join(profilesRoot, name) }))
+    .filter(item => existsSync(join(item.dir, 'cordis.patch.yml')))
+  : []
+const installed = knownProfiles.filter(item => {
+  try {
+    const manifest = JSON.parse(readFileSync(join(item.dir, 'package.json'), 'utf8'))
+    return Boolean(manifest.dependencies?.['dsh-approval-feishu'])
+  } catch { return false }
+})
+/** The configuration an already-wired profile gives us for free on a re-run. */
+const reusedProfile = installed.find(item => pluginEntries.some(entry => entry.name === item.name && entry.config.receiveId))
+const reusedConfig = reusedProfile ? pluginEntries.find(entry => entry.name === reusedProfile.name)?.config ?? {} : {}
+const configuredCli = reusedProfile ? pluginEntries.find(entry => entry.name === reusedProfile.name)?.config.cli : undefined
+
 let cli = flag('--cli') ?? process.env.LARK_APPROVAL_CLI
+const cliFromProfile = !cli && Boolean(configuredCli) && (existsSync(configuredCli) || !configuredCli.includes('/'))
+if (cliFromProfile) cli = configuredCli
 if (!cli) {
   const local = join(homedir(), '.local', 'bin', 'lark-cli')
   for (const candidate of ['/opt/homebrew/bin/lark-cli', '/usr/local/bin/lark-cli', local]) {
@@ -116,7 +162,7 @@ const identityReady = which => runAs(['auth', 'status', '--json'], 20_000).then(
 say(RULE)
 say(' dsh-approval-feishu 飞书接线引导（扫码版）')
 say(RULE)
-say(`\n① lark-cli：${cli}${configDir ? `（配置目录 ${configDir}）` : ''}`)
+say(`\n① lark-cli：${cli}${configDir ? `（配置目录 ${configDir}）` : ''}${cliFromProfile ? '（沿用 profile 里已配置的 CLI）' : ''}`)
 
 // ── 1. 机器人凭据 ──────────────────────────────────────────────────
 if (await identityReady('bot')) {
@@ -135,7 +181,13 @@ if (await identityReady('bot')) {
 // ── 2. 用户身份登录（拿 open_id + 列群） ───────────────────────────
 let userOpenId
 let chats = []
-if (!hasFlag('--skip-login')) {
+// strict-mode=bot 的配置根本不允许用户身份，别让用户白扫一次码。
+const strictMode = await runAs(['config', 'strict-mode'], 15_000).then(({ code, stdout }) => code === 0 ? stdout.trim() : '')
+const botOnly = /strict-mode:\s*bot/i.test(strictMode)
+if (botOnly && !hasFlag('--skip-login') && !await identityReady('user')) {
+  say('   ⓘ lark-cli 的 strict-mode 是 bot：用不了用户身份授权，跳过扫码。')
+  say('     接收者将沿用 profile 里的配置；没有配置时改为给机器人发一条私聊消息获取 open_id。')
+} else if (!hasFlag('--skip-login')) {
   if (await identityReady('user')) {
     say('   ✓ 检测到用户身份已登录')
   } else {
@@ -165,6 +217,11 @@ if (!hasFlag('--skip-login')) {
 say('\n③ 审批卡片发到哪里？')
 let receiveIdType = 'open_id'
 let receiveId = userOpenId
+if (receiveId === undefined && reusedConfig.receiveId) {
+  receiveId = reusedConfig.receiveId
+  receiveIdType = reusedConfig.receiveIdType === 'chat_id' ? 'chat_id' : 'open_id'
+  say(`   沿用 profile 里已配置的接收者：${receiveIdType} ${receiveId}`)
+}
 if (receiveId === undefined) {
   say('   请在飞书里给这个机器人发一条私聊消息（内容任意），正在等待（最多 3 分钟）……')
   const { code, stdout, stderr } = await runAs(['event', 'consume', 'im.message.receive_v1', '--as', 'bot', '--max-events', '1', '--timeout', '180s'], 200_000)
@@ -196,24 +253,12 @@ if (chats.length > 0) {
     say(`   ✓ 私聊发给 ${receiveId}`)
   }
 } else {
-  say(`   ✓ 私聊发给 ${receiveId}（想发到群？完成用户授权后重跑本脚本即可选择）`)
+  say(receiveIdType === 'chat_id'
+    ? `   ✓ 发到群：${receiveId}（想改成私聊？完成用户授权后重跑本脚本即可选择）`
+    : `   ✓ 私聊发给 ${receiveId}（想发到群？完成用户授权后重跑本脚本即可选择）`)
 }
 
 // ── 4. 选择 profile 并把配置写进 cordis.patch.yml ─────────────────
-const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-const profilesRoot = join(dshHome, 'profiles')
-const knownProfiles = existsSync(profilesRoot)
-  ? (await import('node:fs')).readdirSync(profilesRoot)
-    .map(name => ({ name, dir: join(profilesRoot, name) }))
-    .filter(item => existsSync(join(item.dir, 'cordis.patch.yml')))
-  : []
-const installed = knownProfiles.filter(item => {
-  try {
-    const manifest = JSON.parse(readFileSync(join(item.dir, 'package.json'), 'utf8'))
-    return Boolean(manifest.dependencies?.['dsh-approval-feishu'])
-  } catch { return false }
-})
-
 say('\n④ 配置要写进哪个 DSH profile？')
 let target
 const flagProfileDir = flag('--profile-dir')
@@ -239,11 +284,16 @@ if (!installed.includes(target)) {
 
 const patchPath = join(target.dir, 'cordis.patch.yml')
 copyFileSync(patchPath, `${patchPath}.bak-setup`)
+const allowedOpenIds = userOpenId
+  ? [userOpenId]
+  : reusedConfig.allowedOpenIds?.length
+    ? reusedConfig.allowedOpenIds
+    : receiveId.startsWith('ou_') ? [receiveId] : []
 const configLines = [
   `    cli: ${cli}`,
   `    receiveIdType: ${receiveIdType}`,
   `    receiveId: ${receiveId}`,
-  `    allowedOpenIds: [${userOpenId ?? receiveId}]`,
+  `    allowedOpenIds: [${allowedOpenIds.join(', ')}]`,
 ]
 const block = [
   '# dsh-approval-feishu: 审批转飞书（由 bin/setup.mjs 写入）',
@@ -303,11 +353,16 @@ consumerLines.on('line', line => {
   } catch { /* ready 标记等 */ }
 })
 
+// 必须显式 --as bot：插件运行时始终用机器人身份发卡（见 lib/lark.ts）。
+// 少了它，lark-cli 会跟随默认身份（auto 优先用户），于是索要用户态 scope
+// im:message.send_as_user —— 那本来就不是插件需要的权限。
 const send = await runAs(['im', '+messages-send', receiveIdType === 'open_id' ? '--user-id' : '--chat-id', receiveId,
-  '--msg-type', 'interactive', '--content', JSON.stringify(card), '--idempotency-key', `setup-${Date.now()}`])
+  '--msg-type', 'interactive', '--content', JSON.stringify(card), '--idempotency-key', `setup-${Date.now()}`, '--as', 'bot'])
 if (send.code !== 0) {
   consumer.kill('SIGTERM')
-  die(`测试卡片发送失败：\n${(send.stderr || send.stdout).slice(0, 800)}\n    多半是应用缺 im:message 发送权限，去开发者后台补齐后重跑。`)
+  die(`测试卡片发送失败：\n${(send.stderr || send.stdout).slice(0, 800)}\n` +
+    '    本步用机器人身份（--as bot）发卡，只需应用的机器人发消息权限：\n' +
+    '    确认已添加机器人能力、开通 im:message、应用版本已发布且在可用范围内。')
 }
 say('   ✓ 卡片已发出，等待你的点击……')
 
