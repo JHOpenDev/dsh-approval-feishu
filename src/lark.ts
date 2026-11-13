@@ -83,6 +83,30 @@ export type CardActionSink = (event: CardActionEvent) => void | Promise<void>
 /** The ready marker lark-cli writes on stderr once the event bus is subscribed. */
 export const READY_MARKER = '[event] ready event_key='
 
+/** Extracts one double-quoted string field from a (possibly pretty-printed) JSON text. */
+const quotedField = (text: string, name: string): string | undefined =>
+  new RegExp(`"${name}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text)?.[1]
+
+/**
+ * Builds the actionable diagnostic from a failed consumer run. lark-cli prints its JSON error
+ * envelope pretty-printed across several stderr lines, so the last line alone is useless
+ * (typically just `}`). This recognizes the one-consumer-per-key conflict explicitly and
+ * otherwise surfaces the envelope's message and hint.
+ */
+export const summarizeConsumerFailure = (code: number | null, ready: boolean, stderrText: string): string => {
+  const conflict = /another consumer \(pid (\d+)\)/.exec(stderrText)
+  if (conflict !== null) {
+    return `单消费者冲突：card.action.trigger 已被另一个消费者（pid ${conflict[1]}）占用。` +
+      `执行 \`lark-cli event status\` 确认；若是残留进程可 kill 它，或 \`lark-cli event stop --all\` 后等本插件自动重连（≤60 秒）。` +
+      `注意：多个 DSH 实例同时启用本插件会互相争抢，只保留一个。`
+  }
+  const message = quotedField(stderrText, 'message')
+  const hint = quotedField(stderrText, 'hint')
+  const detail = message === undefined ? hint : hint === undefined || hint === message ? message : `${message}（${hint}）`
+  if (detail !== undefined) return `lark-cli：${detail}`
+  return `consumer exited (code ${code}, ready=${ready}): ${stderrText.trim().slice(-600) || 'no diagnostics'}`
+}
+
 /**
  * One bounded `event consume card.action.trigger` run: spawns the CLI, forwards each stdout
  * NDJSON line to the sink after the ready marker, and settles when the child exits or the
@@ -92,12 +116,13 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
   Promise<{ received: number, diagnostic: string }> {
   return new Promise((resolve, reject) => {
     const child: ChildProcess = spawn(cli, ['event', 'consume', 'card.action.trigger', '--as', 'bot'],
-      { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...QUIET, ...options.env } })
+      { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...QUIET, ...options.env } })
     const stdout = createInterface({ input: child.stdout! })
     const stderr = createInterface({ input: child.stderr! })
     let chain = Promise.resolve()
     let received = 0
     let diagnostic = ''
+    let stderrText = ''
     let ready = false
     let settled = false
     const stop = (): void => { try { child.stdin?.end() } catch { /* already gone */ } child.kill('SIGTERM') }
@@ -116,6 +141,9 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
     }, 45_000)
     signal.addEventListener('abort', stop, { once: true })
     stderr.on('line', (line: string) => {
+      // Keep the whole stderr (bounded) so a multi-line JSON error envelope stays readable;
+      // `diagnostic` keeps tracking the newest line for the ready-timeout message.
+      stderrText = `${stderrText}${line}\n`.slice(-65_536)
       diagnostic = line.slice(0, 4000)
       if (line.startsWith(READY_MARKER)) { ready = true; clearTimeout(timeout) }
     })
@@ -133,7 +161,7 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
       if (signal.aborted) { finish(); return }
       settled = true
       clearTimeout(timeout)
-      reject(new Error(`Feishu card action consumer exited (code ${code}, ready=${ready}): ${diagnostic}`))
+      reject(new Error(summarizeConsumerFailure(code, ready, stderrText)))
     })
   })
 }

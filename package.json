@@ -1,6 +1,6 @@
 {
   "name": "dsh-approval-feishu",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Feishu approval bridge for the DeepSeek Harness: every approval/request the agent raises becomes a Feishu interactive card, and clicking the card's buttons resolves the pending approval (allow once / reject).",
   "author": "JH",
   "license": "MIT",
