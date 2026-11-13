@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { consumerRetry, extractConflictingPid, summarizeConsumerFailure } from '../src/lark.ts'
+import { consumerRetry, extractConflictingPid, isNotReadyFailure, NOT_READY_MESSAGE, summarizeConsumerFailure } from '../src/lark.ts'
 
 const CONFLICT_ENVELOPE = [
   '{',
@@ -46,6 +46,15 @@ describe('extractConflictingPid', () => {
     expect(extractConflictingPid('单消费者冲突：card.action.trigger 已被另一个消费者（pid 89628）占用。')).toBe('89628')
     expect(extractConflictingPid('cannot start consumer: another consumer (pid 12345) is already running')).toBe('12345')
     expect(extractConflictingPid('unrelated failure without a pid')).toBeNull()
+  })
+})
+
+describe('isNotReadyFailure', () => {
+  it('matches the bus-never-ready finding and nothing else', () => {
+    expect(isNotReadyFailure(`${NOT_READY_MESSAGE}（lark-cli 输出：……）`)).toBe(true)
+    expect(isNotReadyFailure('lark-cli：context canceled')).toBe(false)
+    expect(isNotReadyFailure('单消费者冲突：card.action.trigger 已被另一个消费者（pid 1）占用。')).toBe(false)
+    expect(NOT_READY_MESSAGE.length).toBeGreaterThan(0)
   })
 })
 

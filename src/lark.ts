@@ -144,7 +144,9 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
       stderr.close()
       resolve({ received, diagnostic })
     }
+    let timedOut = false
     const timeout = setTimeout(() => {
+      timedOut = true
       diagnostic = 'Feishu card action consumer did not become ready within 45 seconds'
       stop()
     }, 45_000)
@@ -170,6 +172,12 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
       if (signal.aborted) { finish(); return }
       settled = true
       clearTimeout(timeout)
+      if (timedOut) {
+        // The readiness timeout fired: the shutdown envelope ("context canceled" & co) is noise,
+        // the actual finding is that the bus never became ready.
+        reject(new Error(`${NOT_READY_MESSAGE}（lark-cli 输出：${summarizeConsumerFailure(code, false, stderrText)}）`))
+        return
+      }
       reject(new Error(summarizeConsumerFailure(code, ready, stderrText)))
     })
   })
@@ -178,6 +186,20 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
 /** Retry backoff for the consumer loop: 1s after a run that stayed up a minute, else doubling to 60s. */
 export const consumerRetry = (previous: number | undefined, ranMs: number): number =>
   previous === undefined || ranMs >= 60_000 ? 1000 : Math.min(previous * 2, 60_000)
+
+/** The finding when a consumer run was killed for never reaching the ready marker. */
+export const NOT_READY_MESSAGE = '事件总线 45 秒内未就绪'
+
+/** True when a failure diagnostic is the bus-never-ready finding. */
+export const isNotReadyFailure = (message: string): boolean => message.includes(NOT_READY_MESSAGE)
+
+/** Restarts the local event bus: `lark-cli event stop --all` (best-effort, bounded). */
+const stopAllBus = (cli: string): Promise<void> => new Promise(resolve => {
+  const child = spawn(cli, ['event', 'stop', '--all'], { stdio: 'ignore', env: { ...process.env, ...QUIET } })
+  const timer = setTimeout(() => { child.kill('SIGTERM'); resolve() }, 15_000)
+  child.once('close', () => { clearTimeout(timer); resolve() })
+  child.once('error', () => { clearTimeout(timer); resolve() })
+})
 
 const delay = (ms: number, signal: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
   const timer = setTimeout(resolve, ms)
@@ -225,11 +247,13 @@ const killProcess = (pid: string): Promise<boolean> => new Promise(resolve => {
 export async function runCardActionConsumer(cli: string, sink: CardActionSink, signal: AbortSignal,
   options: LarkRunnerOptions, report: (message: string) => void): Promise<void> {
   let retry: number | undefined
+  let notReadyRuns = 0
   while (!signal.aborted) {
     const began = Date.now()
     try {
       const { received } = await consumeCardActions(cli, sink, signal, options)
       if (signal.aborted) return
+      notReadyRuns = 0
       report(`consumer exited after ${received} event(s); restarting`)
       retry = consumerRetry(retry, Date.now() - began)
     } catch (error) {
@@ -238,8 +262,23 @@ export async function runCardActionConsumer(cli: string, sink: CardActionSink, s
       const pid = extractConflictingPid(message)
       if (pid !== null && await isStaleCardActionConsumer(pid) && await killProcess(pid)) {
         report(`cleared the stale duplicate consumer (pid ${pid}); re-attaching now`)
+        notReadyRuns = 0
         retry = undefined
+      } else if (isNotReadyFailure(message)) {
+        notReadyRuns += 1
+        if (notReadyRuns >= 2) {
+          // Two consecutive bus-never-ready runs mean the shared bus daemon is stuck (typically
+          // its WebSocket died without recovering): stop it, and the next run starts a fresh bus.
+          notReadyRuns = 0
+          report(`the event bus looked stuck (${NOT_READY_MESSAGE} twice); running \`lark-cli event stop --all\` and re-attaching on a fresh bus`)
+          await stopAllBus(cli)
+          retry = undefined
+        } else {
+          report(`consumer failed: ${message}`)
+          retry = consumerRetry(retry, Date.now() - began)
+        }
       } else {
+        notReadyRuns = 0
         report(`consumer failed: ${message}`)
         retry = consumerRetry(retry, Date.now() - began)
       }
