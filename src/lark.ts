@@ -176,8 +176,42 @@ const delay = (ms: number, signal: AbortSignal): Promise<void> => new Promise((r
 })
 
 /**
+ * Extracts the conflicting consumer's pid from a failure diagnostic, in either the plugin's own
+ * Chinese summary or lark-cli's raw English message.
+ */
+export const extractConflictingPid = (message: string): string | null =>
+  /(?:消费者（pid|consumer \(pid) (\d+)\)?/.exec(message)?.[1] ?? null
+
+/**
+ * True when `pid` is a live `lark-cli event consume card.action.trigger` process — i.e. a
+ * duplicate of this plugin's own channel that only exists as a leftover from an earlier plugin
+ * generation, the setup script's test listener, or a manual terminal run.
+ */
+const isStaleCardActionConsumer = async (pid: string): Promise<boolean> => {
+  if (process.platform === 'win32') return false
+  const command = await new Promise<string>(resolve => {
+    const child = spawn('ps', ['-p', pid, '-o', 'command='], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout.on('data', chunk => { out += String(chunk) })
+    child.once('close', () => resolve(out))
+    child.once('error', () => resolve(''))
+  })
+  return command.includes('event consume') && command.includes('card.action.trigger')
+}
+
+/** Terminates one stale duplicate consumer; resolves false when it could not be signalled. */
+const killProcess = (pid: string): Promise<boolean> => new Promise(resolve => {
+  const child = spawn('kill', [pid], { stdio: 'ignore' })
+  child.once('close', code => resolve(code === 0))
+  child.once('error', () => resolve(false))
+})
+
+/**
  * Keeps one card action consumer alive for the plugin's lifetime: restarts it with backoff
- * while the signal is live, and reports each failure through `report`.
+ * while the signal is live, and reports each failure through `report`. A single-consumer
+ * conflict is healed automatically: the holding process, when it is a duplicate of this very
+ * channel, is terminated and the plugin re-attaches right away (the retry backoff still caps
+ * the pace so two live plugin instances would alternate instead of hot-looping).
  */
 export async function runCardActionConsumer(cli: string, sink: CardActionSink, signal: AbortSignal,
   options: LarkRunnerOptions, report: (message: string) => void): Promise<void> {
@@ -191,8 +225,15 @@ export async function runCardActionConsumer(cli: string, sink: CardActionSink, s
       retry = consumerRetry(retry, Date.now() - began)
     } catch (error) {
       if (signal.aborted) return
-      report(`consumer failed: ${String(error)}`)
-      retry = consumerRetry(retry, Date.now() - began)
+      const message = String(error)
+      const pid = extractConflictingPid(message)
+      if (pid !== null && await isStaleCardActionConsumer(pid) && await killProcess(pid)) {
+        report(`cleared the stale duplicate consumer (pid ${pid}); re-attaching now`)
+        retry = undefined
+      } else {
+        report(`consumer failed: ${message}`)
+        retry = consumerRetry(retry, Date.now() - began)
+      }
     }
     await delay(retry ?? 1000, signal).catch(() => {})
   }

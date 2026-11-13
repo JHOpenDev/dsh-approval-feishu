@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { consumerRetry, summarizeConsumerFailure } from '../src/lark.ts'
+import { consumerRetry, extractConflictingPid, summarizeConsumerFailure } from '../src/lark.ts'
 
 const CONFLICT_ENVELOPE = [
   '{',
@@ -38,6 +38,14 @@ describe('summarizeConsumerFailure', () => {
 
   it('keeps the raw tail when stderr is empty', () => {
     expect(summarizeConsumerFailure(1, false, '')).toContain('no diagnostics')
+  })
+})
+
+describe('extractConflictingPid', () => {
+  it('reads the pid from the plugin Chinese summary and the raw English message', () => {
+    expect(extractConflictingPid('单消费者冲突：card.action.trigger 已被另一个消费者（pid 89628）占用。')).toBe('89628')
+    expect(extractConflictingPid('cannot start consumer: another consumer (pid 12345) is already running')).toBe('12345')
+    expect(extractConflictingPid('unrelated failure without a pid')).toBeNull()
   })
 })
 
