@@ -192,6 +192,7 @@ chmod +x ~/.local/bin/lark-bot
 | 点按钮的人不是你自己却生效了 | 未配置 `allowedOpenIds`；强烈建议配置 |
 | 找不到机器人 | 应用未发布版本，或你不在可用范围里 |
 | 审批迟迟不点，会话卡住 | 默认 10 分钟超时后自动拒绝（fail closed）；可在 `timeoutSeconds` 调整 |
+| **点了卡片按钮没反应** | 按顺序排查：① `node bin/setup.mjs --status` 看 `lastCardAction`——有记录说明点击已到达插件（`blocked-by-allowedOpenIds` = 点击者不在白名单；`stale-card` = 卡片已失效）；② 无记录则手动挂监听 `lark-cli event consume card.action.trigger --as bot` 再点一次——仍无事件就是开发者后台缺订阅：**事件与回调 → 添加 `card.action.trigger`（长连接）→ 发布新版本生效**；③ 事件能到、插件也活跃，但 DSH 没恢复 → 看 DSH 会话里是否显示已恢复（race 模式下面板与飞书先到先得） |
 
 ## 行为细节
 

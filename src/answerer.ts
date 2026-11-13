@@ -27,6 +27,8 @@ export interface BridgeOptions {
    * `fallback`: the card answers alone; the local answerer only sees the request when Feishu fails or times out.
    */
   answerLocally: 'race' | 'fallback'
+  /** Observability hook: how each parsed card click was handled (diagnostics mirror). */
+  onAction?: (record: { operator: string, rid: string, result: string }) => void
 }
 
 /** The two decisions the card offers. */
@@ -211,18 +213,23 @@ export class FeishuApprovalBridge {
       }
     }
     const operator = event.operator_id ?? ''
+    const record = (rid: string, result: string): void => {
+      this.options.onAction?.({ operator: operator || 'unknown', rid, result })
+    }
     if (!this.permitted(operator)) {
       this.log.warn(`card action from ${operator || 'an unknown user'} is not on allowedOpenIds; ignored`)
+      record('n/a', 'blocked-by-allowedOpenIds')
       return
     }
     let value: { rid?: string, decision?: string }
     try { value = JSON.parse(event.action_value ?? '{}') as { rid?: string, decision?: string } }
-    catch { return }
+    catch { record('n/a', 'unparsable-action-value'); return }
     const rid = typeof value.rid === 'string' ? value.rid : undefined
-    if (rid === undefined) return
+    if (rid === undefined) { record('n/a', 'no-rid-in-action-value'); return }
     const entry = this.pending.get(rid)
     if (entry === undefined) {
       // A click on a card this process no longer tracks (restart or expiry): tell the clicker instead of staying silent.
+      record(rid, 'stale-card')
       if (event.message_id) {
         await this.lark.patchCard(event.message_id, decidedCard({
           infoMarkdown: '', rid, decision: 'stale', operator, lang: this.options.lang,
@@ -230,8 +237,9 @@ export class FeishuApprovalBridge {
       }
       return
     }
-    if (value.decision !== 'allow' && value.decision !== 'reject') return
+    if (value.decision !== 'allow' && value.decision !== 'reject') { record(rid, `unknown-decision:${String(value.decision)}`); return }
     this.log.info(`approval ${rid} decided by ${operator || 'unknown'}: ${value.decision}`)
+    record(rid, `applied:${value.decision}`)
     entry.settle(OUTCOME_BY_DECISION[value.decision])
   }
 

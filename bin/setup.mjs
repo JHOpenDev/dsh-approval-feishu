@@ -51,6 +51,15 @@ if (hasFlag('--status')) {
   say(`  updatedAt: ${status.updatedAt}`)
   if (status.state === 'passive') say('\n提示：passive 表示还没配置接收者。重跑本脚本完成接线。')
   if (status.consumer === 'restarting') say('\n提示：消费进程在崩溃重启，lastConsumerError 里有原因（常见：lark-cli 缺失/无机器人凭据）。')
+  if (status.lastCardAction) {
+    say(`  lastCardAction: ${status.lastCardAction.at} · 操作者 ${status.lastCardAction.operator} · 凭据 ${status.lastCardAction.rid} · ${status.lastCardAction.result}`)
+    const result = status.lastCardAction.result
+    if (result === 'stale-card') say('\n提示：点击能到达插件，但点的卡片已不在等待中（超时/已被决定/插件重启过）。真实审批时点当次卡片即可。')
+    else if (result === 'blocked-by-allowedOpenIds') say('\n提示：点击被 allowedOpenIds 拦截——点击者的 open_id 不在白名单里。把 TA 加进 profile patch 的 allowedOpenIds。')
+    else if (result.startsWith('applied:')) say('\n提示：点击已成功应用为审批决定，链路完全正常。')
+  } else if (status.state === 'active') {
+    say('\n提示：还没有记录到任何按钮点击。若点击卡片无反应，多半是开发者后台没订阅 card.action.trigger 事件（见 README 常见问题）。')
+  }
   process.exit(0)
 }
 

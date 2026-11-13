@@ -32,6 +32,9 @@ export function apply(ctx: Context, config: unknown): void {
     reasonMaxChars: settings.reasonMaxChars,
     commandMaxChars: settings.commandMaxChars,
     lang: settings.lang,
+    onAction: ({ operator, rid, result }) => {
+      writeStatus({ lastCardAction: { at: new Date().toISOString(), operator, rid, result } })
+    },
   }, lark, log)
   writeStatus({
     state: 'active',
