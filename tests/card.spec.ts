@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, decidedCard, pendingCard, sanitize, summarizeArguments } from '../src/card.ts'
+import { clamp, decidedCard, extractInfoMarkdown, pendingCard, sanitize, summarizeArguments } from '../src/card.ts'
 
 const request = {
   toolName: 'bash',
@@ -39,6 +39,11 @@ describe('pendingCard', () => {
     reasonMaxChars: 100,
     commandMaxChars: 100,
     lang: 'zh',
+  })
+
+  it('labels the buttons short so they stay on one row, allow first then reject', () => {
+    const actions = (built.card.elements as Array<{ tag: string, actions: Array<{ text: { content: string }, type: string }> }>).at(-1)!
+    expect(actions.actions.map(item => [item.text.content, item.type])).toEqual([['✅ 允许', 'primary'], ['❌ 拒绝', 'danger']])
   })
 
   it('carries two decision buttons with the rid and decision in their values', () => {
@@ -83,7 +88,31 @@ describe('pendingCard', () => {
   })
 })
 
+describe('extractInfoMarkdown', () => {
+  it('round-trips the first div lark_md and tolerates malformed cards', () => {
+    const card = pendingCard({
+      rid: 'r', request, call: undefined, origin: {}, reasonMaxChars: 100, commandMaxChars: 100, lang: 'zh',
+    })
+    expect(extractInfoMarkdown(card.card)).toBe(card.infoMarkdown)
+    expect(extractInfoMarkdown(undefined)).toBe('')
+    expect(extractInfoMarkdown({ elements: 'not-an-array' })).toBe('')
+    expect(extractInfoMarkdown({ elements: [{ tag: 'note' }] })).toBe('')
+  })
+})
+
 describe('decidedCard', () => {
+  it('keeps the full info markdown so the decided card still shows what was approved', () => {
+    const card = decidedCard({ infoMarkdown: '**工具** `bash`\n参数……', rid: 'r', decision: 'allowed-once', lang: 'zh' })
+    const body = (card.elements as Array<{ text?: { content?: string } }>)[0]!
+    expect(body.text!.content).toBe('**工具** `bash`\n参数……')
+  })
+
+  it('omits the body entirely when there is no info markdown', () => {
+    const card = decidedCard({ infoMarkdown: '', rid: 'r', decision: 'stale', lang: 'zh' })
+    const tags = (card.elements as Array<{ tag: string }>).map(element => element.tag)
+    expect(tags).toEqual(['hr', 'note'])
+  })
+
   it('drops the buttons and colors the header by outcome', () => {
     for (const [decision, template] of [['allowed-once', 'green'], ['rejected', 'red'], ['cancelled', 'grey'], ['timeout', 'grey'], ['stale', 'grey']] as const) {
       const card = decidedCard({ infoMarkdown: 'info', rid: 'r', decision, operator: 'ou_me', lang: 'zh' })

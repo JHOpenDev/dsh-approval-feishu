@@ -1,6 +1,6 @@
 /** The approval answerer: turns one `approval/request` into a Feishu card and a button click into the outcome. */
 import { randomUUID } from 'node:crypto'
-import { decidedCard, pendingCard, type DecidedCardInput, type PendingCard } from './card.ts'
+import { decidedCard, extractInfoMarkdown, pendingCard, type DecidedCardInput, type PendingCard } from './card.ts'
 import type { CardActionEvent, LarkCli } from './lark.ts'
 import { describeToolCall, sessionOrigin } from './session-info.ts'
 import type { ApprovalOutcome, ApprovalRequestEvent } from './types.ts'
@@ -228,11 +228,14 @@ export class FeishuApprovalBridge {
     if (rid === undefined) { record('n/a', 'no-rid-in-action-value'); return }
     const entry = this.pending.get(rid)
     if (entry === undefined) {
-      // A click on a card this process no longer tracks (restart or expiry): tell the clicker instead of staying silent.
+      // A click on a card this process no longer tracks (restart or expiry): tell the clicker
+      // instead of staying silent. The original card's info markdown is fetched back so the
+      // decided card still shows what was being approved.
       record(rid, 'stale-card')
       if (event.message_id) {
+        const original = await this.lark.getCard(event.message_id).catch(() => undefined)
         await this.lark.patchCard(event.message_id, decidedCard({
-          infoMarkdown: '', rid, decision: 'stale', operator, lang: this.options.lang,
+          infoMarkdown: extractInfoMarkdown(original), rid, decision: 'stale', operator, lang: this.options.lang,
         })).catch(() => {})
       }
       return

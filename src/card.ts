@@ -123,9 +123,10 @@ export function pendingCard(input: PendingCardInput): PendingCard {
         { tag: 'hr' },
         { tag: 'note', elements: [{ tag: 'plain_text', content: t.note(rid) }] },
         {
+          // Short labels so both buttons stay on one row even on narrow phone screens.
           tag: 'action',
           actions: [
-            { tag: 'button', text: { tag: 'plain_text', content: '✅ 允许一次' }, type: 'primary',
+            { tag: 'button', text: { tag: 'plain_text', content: '✅ 允许' }, type: 'primary',
               value: { rid, decision: 'allow' satisfies Decision } },
             { tag: 'button', text: { tag: 'plain_text', content: '❌ 拒绝' }, type: 'danger',
               value: { rid, decision: 'reject' satisfies Decision } },
@@ -134,6 +135,13 @@ export function pendingCard(input: PendingCardInput): PendingCard {
       ],
     },
   }
+}
+
+/** Reads the info markdown (the first div's lark_md) back out of a card JSON, e.g. one fetched from the message API. */
+export const extractInfoMarkdown = (card: Record<string, unknown> | undefined): string => {
+  const elements = Array.isArray(card?.elements) ? card.elements as Array<{ tag?: string, text?: { tag?: string, content?: string } }> : []
+  const div = elements.find(element => element.tag === 'div' && element.text?.tag === 'lark_md')
+  return typeof div?.text?.content === 'string' ? div.text.content : ''
 }
 
 /** Outcome presentation for the decided card. */
@@ -147,19 +155,18 @@ const DECIDED: Record<DecidedCardInput['decision'], { template: string, text: (t
   'local-rejected': { template: 'red', text: t => t.localRejected },
 }
 
-/** Builds the card that replaces the pending one after a decision (or timeout): no buttons, one verdict. */
+/** Builds the card that replaces the pending one after a decision (or timeout): no buttons, one verdict, full info. */
 export function decidedCard(input: DecidedCardInput): Record<string, unknown> {
   const t: Copy = copy[input.lang] as Copy
   const state = DECIDED[input.decision]
   const notes = [t.note(input.rid)]
   if (input.operator) notes.push(t.decidedBy(oneLine(input.operator)))
+  const elements: Array<Record<string, unknown>> = []
+  if (input.infoMarkdown) elements.push({ tag: 'div', text: { tag: 'lark_md', content: input.infoMarkdown } })
+  elements.push({ tag: 'hr' }, { tag: 'note', elements: [{ tag: 'plain_text', content: notes.join(' · ') }] })
   return {
     config: { wide_screen_mode: true },
     header: { template: state.template, title: { tag: 'plain_text', content: state.text(t) } },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: input.infoMarkdown } },
-      { tag: 'hr' },
-      { tag: 'note', elements: [{ tag: 'plain_text', content: notes.join(' · ') }] },
-    ],
+    elements,
   }
 }

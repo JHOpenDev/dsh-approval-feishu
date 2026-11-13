@@ -18,6 +18,9 @@ function fakeLark(options: { failSend?: boolean } = {}) {
     patchCard: vi.fn(async (messageId: string, card: Record<string, unknown>): Promise<void> => {
       patches.push({ messageId, card })
     }),
+    getCard: vi.fn(async (): Promise<Record<string, unknown> | undefined> => ({
+      elements: [{ tag: 'div', text: { tag: 'lark_md', content: '原始审批信息' } }],
+    })),
   }
 }
 
@@ -151,7 +154,10 @@ describe('FeishuApprovalBridge.answer', () => {
     const bridge = bridgeWith(lark)
     await bridge.handleAction(click('gone1234', 'allow'))
     await vi.waitFor(() => expect(lark.patchCard).toHaveBeenCalled())
+    expect(lark.getCard).toHaveBeenCalledWith('om_card')
     expect(lark.patches[0]!.card).toMatchObject({ header: { template: 'grey' } })
+    const body = lark.patches[0]!.card.elements as Array<{ text?: { content?: string } }>
+    expect(body.some(element => element.text?.content === '原始审批信息')).toBe(true)
     expect(bridge.pendingCount).toBe(0)
   })
 

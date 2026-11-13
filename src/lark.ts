@@ -75,6 +75,15 @@ export class LarkCli {
     await this.call<unknown>(['im', 'messages', 'patch', '--message-id', messageId,
       '--data', JSON.stringify({ content: JSON.stringify(card) })])
   }
+
+  /** Fetches one interactive card message's parsed card JSON; undefined when it cannot be read. */
+  async getCard(messageId: string): Promise<Record<string, unknown> | undefined> {
+    const data = await this.call<{ items?: Array<{ body?: { content?: string } }> }>(
+      ['api', 'GET', `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`])
+    const content = data.items?.[0]?.body?.content
+    if (typeof content !== 'string') return undefined
+    try { return JSON.parse(content) as Record<string, unknown> } catch { return undefined }
+  }
 }
 
 /** What the consumer hands to its owner for each parsed event line. */
