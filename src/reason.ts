@@ -5,6 +5,11 @@ type Lang = 'zh' | 'en'
 
 /** DSH's fixed prefix on a reason that asks to escalate the sandbox to full access. */
 const ESCALATE = 'escalate sandbox to danger-full-access:'
+/**
+ * DSH's own localized wording of the same request (its `displayReason.zh`), such as
+ * "允许本次操作使用 danger-full-access 权限：…". The plugin prefers `displayReason`, so this is what most cards carry.
+ */
+const ESCALATE_ZH = /^允许(?:本次|这次|此)?操作(?:使用|以)?\s*danger-full-access\s*(?:权限)?\s*[：:]\s*/
 
 const copy = {
   zh: {
@@ -103,6 +108,12 @@ export function humanizeReason(request: ApprovalRequestEvent, lang: Lang): strin
   if (body.toLowerCase().startsWith(ESCALATE)) {
     escalated = true
     body = body.slice(ESCALATE.length).trim()
+  } else {
+    const localized = ESCALATE_ZH.exec(body)
+    if (localized) {
+      escalated = true
+      body = body.slice(localized[0].length).trim()
+    }
   }
 
   const specific = translateByTool(request.toolName, body, lang)

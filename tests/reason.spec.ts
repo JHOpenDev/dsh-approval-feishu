@@ -8,8 +8,12 @@ const req = (overrides: Partial<ApprovalRequestEvent> = {}): ApprovalRequestEven
   ...overrides,
 })
 
-const PLUGIN_MANAGER_REASON =
-  'escalate sandbox to danger-full-access: plugin_manager {"action":"set_bundle","enabled":true,"target":"@local/jianhai-ai-workbench"}. Profile changes persist across sessions; installed Host code runs outside the workspace sandbox.'
+/** The machine-written body of a plugin_manager request, as DSH emits it. */
+const PLUGIN_MANAGER_BODY =
+  'plugin_manager {"action":"set_bundle","enabled":true,"target":"@local/jianhai-ai-workbench"}. Profile changes persist across sessions; installed Host code runs outside the workspace sandbox.'
+const PLUGIN_MANAGER_REASON = `escalate sandbox to danger-full-access: ${PLUGIN_MANAGER_BODY}`
+/** What the card actually carries for most tools: DSH's own localized wording (its displayReason.zh), as seen on a real card. */
+const ESCALATE_ZH_PREFIX = '允许本次操作使用 danger-full-access 权限：'
 
 describe('humanizeReason', () => {
   it('returns undefined when there is no reason', () => {
@@ -58,6 +62,32 @@ describe('humanizeReason', () => {
   it('prefers the localized displayReason', () => {
     const request = req({ reason: 'raw english', displayReason: { en: 'raw english', zh: '已经本地化的说明' } })
     expect(humanizeReason(request, 'zh')).toBe('已经本地化的说明')
+  })
+
+  it("lifts DSH's own localized escalation wording, which is what most real cards carry", () => {
+    const displayReason = { en: 'refetch wecom data', zh: `${ESCALATE_ZH_PREFIX}修改工作区外取数脚本口径并重新拉取企微数据` }
+    expect(humanizeReason(req({ toolName: 'bash', reason: PLUGIN_MANAGER_REASON, displayReason }), 'zh'))
+      .toBe('需要完整权限（在沙箱外执行） · 修改工作区外取数脚本口径并重新拉取企微数据')
+  })
+
+  it('translates a plugin_manager request that arrives in the localized wording', () => {
+    const displayReason = { en: PLUGIN_MANAGER_BODY, zh: `${ESCALATE_ZH_PREFIX}${PLUGIN_MANAGER_BODY}` }
+    expect(humanizeReason(req({ toolName: 'plugin_manager', reason: PLUGIN_MANAGER_REASON, displayReason }), 'zh'))
+      .toBe('需要完整权限（在沙箱外执行） · 启用插件「jianhai-ai-workbench」 · 长期有效、所有会话可用')
+  })
+
+  it('does not mistake an ordinary sentence for the escalation wording', () => {
+    expect(humanizeReason(req({ reason: '允许本次操作的前提是先备份原文件' }), 'zh')).toBe('允许本次操作的前提是先备份原文件')
+  })
+
+  it('end to end: a real bash request in the localized wording shows plain language on the card', () => {
+    const request = req({ toolName: 'bash', reason: PLUGIN_MANAGER_REASON,
+      displayReason: { en: PLUGIN_MANAGER_BODY, zh: `${ESCALATE_ZH_PREFIX}修改工作区外取数脚本口径并重新拉取企微数据` } })
+    const card = pendingCard({ rid: 'r2', request, call: { name: 'bash', arguments: '{"command":"python3 fetch.py"}' },
+      origin: { cwd: '/Users/jh/Documents/DSH/AI工作台' }, reasonMaxChars: 400, commandMaxChars: 400, lang: 'zh' })
+    expect(card.infoMarkdown).toContain('**原因** 需要完整权限（在沙箱外执行） · 修改工作区外取数脚本口径并重新拉取企微数据')
+    expect(card.infoMarkdown).not.toContain('danger-full-access')
+    expect(card.infoMarkdown).not.toContain('允许本次操作使用')
   })
 
   it('renders English when asked', () => {
