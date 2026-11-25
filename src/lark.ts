@@ -125,7 +125,11 @@ export function consumeCardActions(cli: string, sink: CardActionSink, signal: Ab
   Promise<{ received: number, diagnostic: string }> {
   return new Promise((resolve, reject) => {
     const child: ChildProcess = spawn(cli, ['event', 'consume', 'card.action.trigger', '--as', 'bot'],
-      { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...QUIET, ...options.env } })
+      { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...QUIET, ...options.env } })
+    // Newer lark-cli treats stdin EOF as an exit signal, so an ignored stdin (immediate EOF) made the consumer exit
+    // right after ready and get restarted in a loop. A piped stdin stays open until stop() ends it — which is also
+    // how stop() asks the CLI to quit, matching the original design.
+    child.stdin?.on('error', () => { /* ignore EPIPE when the CLI has already exited */ })
     const stdout = createInterface({ input: child.stdout! })
     const stderr = createInterface({ input: child.stderr! })
     let chain = Promise.resolve()
