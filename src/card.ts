@@ -1,5 +1,6 @@
 /** Feishu card JSON builders for the pending-approval and decided states (Card 1.0). */
 import type { ApprovalRequestEvent } from './types.ts'
+import { humanizeReason } from './reason.ts'
 
 export type Decision = 'allow' | 'reject'
 
@@ -107,7 +108,7 @@ export function pendingCard(input: PendingCardInput): PendingCard {
   const lines: string[] = [`**${t.tool}** \`${oneLine(request.toolName).slice(0, 80)}\``]
   const args = input.call?.arguments !== undefined ? summarizeArguments(input.call.arguments, input.commandMaxChars) : undefined
   if (args !== undefined) lines.push(`**${t.call}**\n\`\`\`\n${args}\n\`\`\``)
-  const reason = request.displayReason?.zh ?? request.reason ?? request.displayReason?.en
+  const reason = humanizeReason(request, input.lang)
   if (reason) lines.push(`**${t.reason}** ${oneLine(clamp(reason, input.reasonMaxChars))}`)
   if (input.origin.cwd) lines.push(`**${t.cwd}** \`${oneLine(input.origin.cwd).slice(0, 200)}\``)
   if (input.origin.session) lines.push(`**${t.session}** \`${oneLine(input.origin.session).slice(0, 80)}\``)
